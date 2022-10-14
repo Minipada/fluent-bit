@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.3) # https://discourse.ros.org/t/find-package-rclcpp-throwing-cmake-error/3864
 project(fluent-bit)
 
 # Fluent Bit Version
@@ -870,6 +870,14 @@ endif()
 find_package(PostgreSQL)
 if(FLB_OUT_PGSQL AND (NOT PostgreSQL_FOUND))
    FLB_OPTION(FLB_OUT_PGSQL OFF)
+endif()
+
+# ROS2
+# ====
+find_package(rclc)
+find_package(windrose_data_collection_msgs)
+if(FLB_IN_ROS2 AND ((NOT rclc_FOUND) OR (NOT windrose_data_collection_msgs_FOUND)))
+  FLB_OPTION(FLB_IN_ROS2 OFF)
 endif()
 
 # Arrow GLib

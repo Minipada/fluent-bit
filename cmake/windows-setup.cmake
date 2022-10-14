@@ -46,6 +46,7 @@ if(FLB_WINDOWS_DEFAULTS)
   set(FLB_IN_STATSD             Yes)
   set(FLB_IN_STORAGE_BACKLOG    Yes)
   set(FLB_IN_EMITTER            Yes)
+  set(FLB_IN_ROS2                No)
 
   # OUTPUT plugins
   # ==============

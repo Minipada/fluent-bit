@@ -186,6 +186,7 @@ REGISTER_IN_PLUGIN("in_collectd")
 REGISTER_IN_PLUGIN("in_statsd")
 REGISTER_IN_PLUGIN("in_opentelemetry")
 REGISTER_IN_PLUGIN("in_event_test")
+REGISTER_IN_PLUGIN("in_ros2")
 
 if (FLB_IN_STORAGE_BACKLOG)
   REGISTER_IN_PLUGIN("in_storage_backlog")
