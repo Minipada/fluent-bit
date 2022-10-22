@@ -17,31 +17,13 @@
  *  limitations under the License.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
-
-#include <fluent-bit/flb_config.h>
-#include <fluent-bit/flb_config_map.h>
-#include <fluent-bit/flb_error.h>
-#include <fluent-bit/flb_input.h>
-#include <fluent-bit/flb_input_plugin.h>
-#include <fluent-bit/flb_pack.h>
-#include <fluent-bit/flb_time.h>
-#include <msgpack.h>
-
-#include "rcl/error_handling.h"
-#include "rclc/executor.h"
-#include "rclc/rclc.h"
-
-#include "windrose_data_collection_msgs/msg/collected_data.h"
-
 #include "in_ros2.h"
 
 /* Configuration properties map */
 static struct flb_config_map config_map[] = {
-    {FLB_CONFIG_MAP_STR, "topic", NULL, 0, FLB_TRUE,
-     offsetof(struct flb_ros2, topic), "Set the topic to subscribe to"},
+    {FLB_CONFIG_MAP_SLIST, "topics", NULL, 0, FLB_TRUE,
+     offsetof(struct flb_ros2, topics),
+     "Set the topics to subscribe to. Use a space separated string"},
     {FLB_CONFIG_MAP_STR, "node_name", "fluentbit_rclc", 0, FLB_TRUE,
      offsetof(struct flb_ros2, node_name), "Set the name of the node"},
     {FLB_CONFIG_MAP_INT, "spin_time", "100", 0, FLB_TRUE,
@@ -50,21 +32,18 @@ static struct flb_config_map config_map[] = {
     {0}};
 
 rclc_executor_t executor;
-rcl_subscription_t data_subscription;
 rcl_node_t node;
 rcl_init_options_t init_options;
 rcl_context_t context;
-rcl_subscription_options_t subscription_options;
-const rosidl_message_type_support_t *data_type_support;
 rcl_allocator_t allocator;
 rcl_node_options_t node_ops;
-windrose_data_collection_msgs__msg__CollectedData data_msg;
-windrose_data_collection_msgs__msg__CollectedData *collected_data_msg = NULL;
+windrose_data_collection_interfaces__msg__StringStamped *collected_data_msg =
+    NULL;
 static volatile bool new_data_flag = false;
 
-static int
-set_timestamp(msgpack_packer *mp_pck,
-              const windrose_data_collection_msgs__msg__CollectedData *msg) {
+static int set_timestamp(
+    msgpack_packer *mp_pck,
+    const windrose_data_collection_interfaces__msg__StringStamped *msg) {
   struct flb_time msg_time = {.tm.tv_sec = msg->header.stamp.sec,
                               .tm.tv_nsec = msg->header.stamp.nanosec};
   int ret = flb_time_append_to_msgpack(&msg_time, mp_pck, 0);
@@ -73,8 +52,8 @@ set_timestamp(msgpack_packer *mp_pck,
 }
 
 void data_callback(const void *msgin) {
-  windrose_data_collection_msgs__msg__CollectedData *msg =
-      (windrose_data_collection_msgs__msg__CollectedData *)msgin;
+  windrose_data_collection_interfaces__msg__StringStamped *msg =
+      (windrose_data_collection_interfaces__msg__StringStamped *)msgin;
   if (msg == NULL) {
     flb_warn("Callback: msg NULL\n");
   } else {
@@ -124,7 +103,6 @@ static inline int process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx,
 static int in_ros2_collect(struct flb_input_instance *ins,
                            struct flb_config *config, void *in_context) {
   struct flb_ros2 *ctx = in_context;
-  int ret = -1;
   rclc_executor_spin_some(&executor, RCL_MS_TO_NS(ctx->spin_time));
 
   if (new_data_flag == true) {
@@ -146,7 +124,8 @@ static int in_ros2_collect(struct flb_input_instance *ins,
     ctx->buf = collected_data_msg->data.data;
     ctx->buf_len = collected_data_msg->data.capacity;
 
-    ret = flb_pack_json(ctx->buf, ctx->buf_len, &pack, &pack_size, &root_type);
+    int ret =
+        flb_pack_json(ctx->buf, ctx->buf_len, &pack, &pack_size, &root_type);
     if (ret == FLB_ERR_JSON_PART) {
       flb_plg_warn(ctx->ins, "data incomplete, waiting for more...");
       msgpack_sbuffer_destroy(&mp_sbuf);
@@ -163,7 +142,7 @@ static int in_ros2_collect(struct flb_input_instance *ins,
       flb_pack_state_init(&ctx->pack_state);
       flb_free(pack);
 
-      flb_input_chunk_append_raw(ins, NULL, 0, mp_sbuf.data, mp_sbuf.size);
+      flb_input_chunk_append_raw(ctx->ins, NULL, 0, mp_sbuf.data, mp_sbuf.size);
       msgpack_sbuffer_destroy(&mp_sbuf);
       return 0;
     }
@@ -213,44 +192,76 @@ static int ros2_node_init(struct flb_ros2 *ctx) {
   return 0;
 }
 
-static int ros2_subscriber_init(struct flb_ros2 *ctx) {
-  data_type_support = ROSIDL_GET_MSG_TYPE_SUPPORT(windrose_data_collection_msgs,
-                                                  msg, CollectedData);
-  data_subscription = rcl_get_zero_initialized_subscription();
-  subscription_options = rcl_subscription_get_default_options();
+static int ros2_subscribers_init(struct flb_ros2 *ctx) {
+  struct mk_list *head;
+  struct mk_list *tmp;
 
-  const char *dc_topic_name = ctx->topic;
+  struct rclc_subscriber *subscriber;
+  struct flb_config_map_val *mv;
+  struct flb_slist_entry *topic = NULL;
 
-  rcl_ret_t rc =
-      rcl_subscription_init(&data_subscription, &node, data_type_support,
-                            dc_topic_name, &subscription_options);
-  if (rc != RCL_RET_OK) {
-    flb_error("Failed to create subscriber %s.\n", dc_topic_name);
-    return -1;
-  } else {
-    flb_info("Created subscriber %s", dc_topic_name);
+  int len = mk_list_size(ctx->topics);
+  if (!ctx->topics || len == 0) {
+    flb_error("No 'topics' options has been specified.");
+    return 0;
   }
+  mk_list_init(&ctx->topic_subs);
 
-  if (false ==
-      windrose_data_collection_msgs__msg__CollectedData__init(&data_msg)) {
-    flb_error("Failed to init msg.\n");
-    return -1;
+  mk_list_foreach(head, ctx->topics) {
+    topic = mk_list_entry(head, struct flb_slist_entry, _head);
+    subscriber = flb_malloc(sizeof(struct rclc_subscriber));
+    if (!subscriber) {
+      flb_errno();
+      return -1;
+    }
+    subscriber->data_subscription = rcl_get_zero_initialized_subscription();
+    subscriber->data_type_support = ROSIDL_GET_MSG_TYPE_SUPPORT(
+        windrose_data_collection_interfaces, msg, StringStamped);
+    subscriber->subscription_options = rcl_subscription_get_default_options();
+
+    rcl_ret_t rc = rcl_subscription_init(
+        &(subscriber->data_subscription), &node, subscriber->data_type_support,
+        topic->str, &(subscriber->subscription_options));
+    if (rc != RCL_RET_OK) {
+      flb_error("Failed to create subscriber %s.\n", topic->str);
+      return -1;
+
+    } else {
+      flb_info("Created subscriber %s", topic->str);
+    }
+    // subscriber->index = i;
+    if (false == windrose_data_collection_interfaces__msg__StringStamped__init(
+                     &(subscriber->data_msg))) {
+      flb_error("Failed to init msg.\n");
+      return -1;
+    }
+
+    mk_list_add(&subscriber->_head, &(ctx->topic_subs));
   }
 
   return 0;
 }
 
-static int ros2_executor_init() {
+static int ros2_executor_init(struct flb_ros2 *ctx) {
   /* Executor */
-  rclc_executor_init(&executor, &context, 1, &allocator);
+  int len = mk_list_size(ctx->topics);
+  rclc_executor_init(&executor, &context, len, &allocator);
 
-  /* Add subscription to executor */
-  rcl_ret_t rc = rclc_executor_add_subscription(
-      &executor, &data_subscription, &data_msg, &data_callback, ON_NEW_DATA);
-  if (rc != RCL_RET_OK) {
-    flb_error("Error in rclc_executor_add_subscription.\n");
+  /* Add subscriptions to executor */
+  struct mk_list *head;
+  struct mk_list *tmp;
+  struct rclc_subscriber *an_item;
+  rcl_ret_t rc;
+
+  mk_list_foreach_safe(head, tmp, &ctx->topic_subs) {
+    an_item = mk_list_entry(head, struct rclc_subscriber, _head);
+    rc = rclc_executor_add_subscription(&executor, &an_item->data_subscription,
+                                        &(an_item->data_msg), &data_callback,
+                                        ON_NEW_DATA);
+    if (rc != RCL_RET_OK) {
+      flb_error("Error in rclc_executor_add_subscription.\n");
+    }
   }
-
   rc = rclc_executor_prepare(&executor);
   if (rc != RCL_RET_OK) {
     flb_error("Error in rclc_executor_prepare.\n");
@@ -287,12 +298,12 @@ static int in_ros2_init(struct flb_input_instance *in,
     return -1;
   }
 
-  ret = ros2_subscriber_init(ctx);
+  ret = ros2_subscribers_init(ctx);
   if (ret == -1) {
     return -1;
   }
 
-  ret = ros2_executor_init();
+  ret = ros2_executor_init(ctx);
   if (ret == -1) {
     return -1;
   }
@@ -308,7 +319,7 @@ static int in_ros2_init(struct flb_input_instance *in,
   ret = flb_input_set_collector_time(in, in_ros2_collect, 1, 0, config);
   if (ret < 0) {
     flb_plg_error(ctx->ins, "could not set collector for ros2 input plugin");
-    flb_free(ctx->topic);
+    flb_free(ctx->topics);
     return -1;
   }
   ctx->coll_fd = ret;
@@ -318,11 +329,24 @@ static int in_ros2_init(struct flb_input_instance *in,
 
 static int in_ros2_exit(void *data, struct flb_config *config) {
   /* Clean up */
-  rcl_ret_t rc;
-  rc = rcl_subscription_fini(&data_subscription, &node);
+  rcl_ret_t rc = RCL_RET_OK;
+  struct rclc_subscriber *an_item;
+  struct mk_list *head;
+  struct mk_list *tmp;
+  struct flb_ros2 *ctx = data;
+
+  mk_list_foreach_safe(head, tmp, &ctx->topic_subs) {
+    an_item = mk_list_entry(head, struct rclc_subscriber, _head);
+    rc = rcl_subscription_fini(&an_item->data_subscription, &node);
+  }
   rc += rcl_node_fini(&node);
   rc += rcl_init_options_fini(&init_options);
-  windrose_data_collection_msgs__msg__CollectedData__fini(&data_msg);
+  mk_list_foreach_safe(head, tmp, &ctx->topic_subs) {
+    an_item = mk_list_entry(head, struct rclc_subscriber, _head);
+    // rc = rcl_subscription_fini(&an_item->data_subscription, &node);
+    windrose_data_collection_interfaces__msg__StringStamped__fini(
+        &(an_item->data_msg));
+  }
   rc += rclc_executor_fini(&executor);
 
   if (rc != RCL_RET_OK) {
@@ -331,6 +355,19 @@ static int in_ros2_exit(void *data, struct flb_config *config) {
   }
   return 0;
 }
+
+// mk_list_foreach_safe(head, tmp, &ctx->topic_subs) {
+//     an_item = mk_list_entry(head, struct rclc_subscriber, _head);
+//     // flb_info("list item data value: %d", an_item->index);
+
+//     rc = rclc_executor_add_subscription(&executor,
+//     &an_item->data_subscription,
+//                                         &(an_item->data_msg), &data_callback,
+//                                         ON_NEW_DATA);
+//     if (rc != RCL_RET_OK) {
+//       flb_error("Error in rclc_executor_add_subscription.\n");
+//     }
+//   }
 
 struct flb_input_plugin in_ros2_plugin = {.name = "ROS2",
                                           .description = "ROS2 Input",

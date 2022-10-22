@@ -22,15 +22,44 @@
 
 #include <fluent-bit/flb_config.h>
 #include <fluent-bit/flb_input.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#include <fluent-bit/flb_config.h>
+#include <fluent-bit/flb_config_map.h>
+#include <fluent-bit/flb_error.h>
+#include <fluent-bit/flb_input.h>
+#include <fluent-bit/flb_input_plugin.h>
+#include <fluent-bit/flb_pack.h>
+#include <fluent-bit/flb_time.h>
+#include <msgpack.h>
+
+#include "rcl/error_handling.h"
+#include "rclc/executor.h"
+#include "rclc/rclc.h"
+
+#include "windrose_data_collection_interfaces/msg/string_stamped.h"
+
+struct rclc_subscriber {
+  rcl_subscription_t data_subscription;
+  const rosidl_message_type_support_t *data_type_support;
+  rcl_subscription_options_t subscription_options;
+  // int index;
+  char *topic_name;
+  windrose_data_collection_interfaces__msg__StringStamped data_msg;
+  struct mk_list _head;
+};
 
 /* ROS2 Input configuration & context */
 struct flb_ros2 {
-  int coll_fd;         /* collector fd          */
-  flb_sds_t topic;     /* topic to subscribe to */
-  flb_sds_t node_name; /* Name of the node      */
-  int spin_time;       /* Time to wait, in ms   */
-  int buf_len;         /* read buffer length    */
-  char *buf;           /* read buffer           */
+  int coll_fd;               /* collector fd          */
+  struct mk_list *topics;    /* topics to subscribe to */
+  struct mk_list topic_subs; /* topics subscribers */
+  flb_sds_t node_name;       /* Name of the node      */
+  int spin_time;             /* Time to wait, in ms   */
+  int buf_len;               /* read buffer length    */
+  char *buf;                 /* read buffer           */
   struct flb_pack_state pack_state;
   struct flb_input_instance *ins;
 };
