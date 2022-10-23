@@ -31,6 +31,7 @@ static struct flb_config_map config_map[] = {
     /* EOF */
     {0}};
 
+// Ideally we pass pointers and not use global variables
 rclc_executor_t executor;
 rcl_node_t node;
 rcl_init_options_t init_options;
@@ -95,7 +96,6 @@ void data_callback(const void *msgin) {
     flb_debug("Callback: I heard: %d.%d %s\n", msg->header.stamp.sec,
               msg->header.stamp.nanosec, msg->data.data);
     struct flb_ros2 *ctx = glob_ctx;
-    new_data_flag = true;
 
     msgpack_sbuffer mp_sbuf;
     msgpack_unpacked result;
