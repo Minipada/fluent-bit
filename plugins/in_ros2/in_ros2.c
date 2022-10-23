@@ -37,8 +37,7 @@ rcl_init_options_t init_options;
 rcl_context_t context;
 rcl_allocator_t allocator;
 rcl_node_options_t node_ops;
-windrose_data_collection_interfaces__msg__StringStamped *collected_data_msg =
-    NULL;
+void *glob_ctx;
 static volatile bool new_data_flag = false;
 
 static int set_timestamp(
@@ -51,21 +50,10 @@ static int set_timestamp(
   return ret;
 }
 
-void data_callback(const void *msgin) {
-  windrose_data_collection_interfaces__msg__StringStamped *msg =
-      (windrose_data_collection_interfaces__msg__StringStamped *)msgin;
-  if (msg == NULL) {
-    flb_warn("Callback: msg NULL\n");
-  } else {
-    flb_debug("Callback: I heard: %d.%d %s\n", msg->header.stamp.sec,
-              msg->header.stamp.nanosec, msg->data.data);
-    collected_data_msg = msg;
-    new_data_flag = true;
-  }
-}
-
-static inline int process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx,
-                               char *data, size_t data_size) {
+static inline int
+process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx, char *data,
+             size_t data_size,
+             windrose_data_collection_interfaces__msg__StringStamped *msg) {
   size_t off = 0;
   msgpack_unpacked result;
   msgpack_object entry;
@@ -79,7 +67,7 @@ static inline int process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx,
 
     if (entry.type == MSGPACK_OBJECT_MAP) {
       msgpack_pack_array(mp_pck, 2);
-      set_timestamp(mp_pck, collected_data_msg);
+      set_timestamp(mp_pck, msg);
       msgpack_pack_object(mp_pck, entry);
     } else if (entry.type == MSGPACK_OBJECT_ARRAY) {
       msgpack_pack_object(mp_pck, entry);
@@ -98,15 +86,17 @@ static inline int process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx,
   msgpack_unpacked_destroy(&result);
   return 0;
 }
+void data_callback(const void *msgin) {
+  windrose_data_collection_interfaces__msg__StringStamped *msg =
+      (windrose_data_collection_interfaces__msg__StringStamped *)msgin;
+  if (msg == NULL) {
+    flb_warn("Callback: msg NULL\n");
+  } else {
+    flb_debug("Callback: I heard: %d.%d %s\n", msg->header.stamp.sec,
+              msg->header.stamp.nanosec, msg->data.data);
+    struct flb_ros2 *ctx = glob_ctx;
+    new_data_flag = true;
 
-/* cb_collect callback */
-static int in_ros2_collect(struct flb_input_instance *ins,
-                           struct flb_config *config, void *in_context) {
-  struct flb_ros2 *ctx = in_context;
-  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(ctx->spin_time));
-
-  if (new_data_flag == true) {
-    flb_debug("Collecting data");
     msgpack_sbuffer mp_sbuf;
     msgpack_unpacked result;
     msgpack_packer mp_pck;
@@ -121,22 +111,20 @@ static int in_ros2_collect(struct flb_input_instance *ins,
 
     size_t pack_size;
     char *pack;
-    ctx->buf = collected_data_msg->data.data;
-    ctx->buf_len = collected_data_msg->data.capacity;
+    ctx->buf = msg->data.data;
+    ctx->buf_len = msg->data.capacity;
 
     int ret =
         flb_pack_json(ctx->buf, ctx->buf_len, &pack, &pack_size, &root_type);
     if (ret == FLB_ERR_JSON_PART) {
       flb_plg_warn(ctx->ins, "data incomplete, waiting for more...");
       msgpack_sbuffer_destroy(&mp_sbuf);
-      return 0;
     } else if (ret == FLB_ERR_JSON_INVAL) {
       flb_plg_warn(ctx->ins, "invalid JSON message, skipping");
       msgpack_sbuffer_destroy(&mp_sbuf);
-      return -1;
     } else if (ret == 0) {
       /* Process valid packaged records */
-      process_pack(&mp_pck, ctx, pack, pack_size);
+      process_pack(&mp_pck, ctx, pack, pack_size, msg);
 
       flb_pack_state_reset(&ctx->pack_state);
       flb_pack_state_init(&ctx->pack_state);
@@ -144,14 +132,8 @@ static int in_ros2_collect(struct flb_input_instance *ins,
 
       flb_input_chunk_append_raw(ctx->ins, NULL, 0, mp_sbuf.data, mp_sbuf.size);
       msgpack_sbuffer_destroy(&mp_sbuf);
-      return 0;
     }
-  } else {
-    flb_debug("No data");
   }
-  new_data_flag = false;
-
-  return 0;
 }
 
 static int ros2_rclc_init() {
@@ -194,10 +176,7 @@ static int ros2_node_init(struct flb_ros2 *ctx) {
 
 static int ros2_subscribers_init(struct flb_ros2 *ctx) {
   struct mk_list *head;
-  struct mk_list *tmp;
-
   struct rclc_subscriber *subscriber;
-  struct flb_config_map_val *mv;
   struct flb_slist_entry *topic = NULL;
 
   int len = mk_list_size(ctx->topics);
@@ -270,6 +249,14 @@ static int ros2_executor_init(struct flb_ros2 *ctx) {
   return 0;
 }
 
+/* cb_collect callback */
+static int in_ros2_collect(struct flb_input_instance *ins,
+                           struct flb_config *config, void *in_context) {
+  struct flb_ros2 *ctx = in_context;
+  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(ctx->spin_time));
+  return 0;
+}
+
 /* Initialize plugin */
 static int in_ros2_init(struct flb_input_instance *in,
                         struct flb_config *config, void *data) {
@@ -278,6 +265,8 @@ static int in_ros2_init(struct flb_input_instance *in,
 
   /* Allocate space for the configuration */
   ctx = flb_calloc(1, sizeof(struct flb_ros2));
+  glob_ctx = ctx;
+
   if (!ctx) {
     return -1;
   }
@@ -312,17 +301,14 @@ static int in_ros2_init(struct flb_input_instance *in,
   flb_pack_state_init(&ctx->pack_state);
   /* Load fluentbit context config */
   flb_input_set_context(in, ctx);
-  /* TODO It would be great if we could use the ROS callback to send the data
-  to fluent bit. At the moment, I don't know how I can pass the context
-  "globally" to the ros callback */
   /* Fluentbit collect */
-  ret = flb_input_set_collector_time(in, in_ros2_collect, 1, 0, config);
+  ret = flb_input_set_collector_time(in, in_ros2_collect, 0, 1000000, config);
   if (ret < 0) {
     flb_plg_error(ctx->ins, "could not set collector for ros2 input plugin");
     flb_free(ctx->topics);
     return -1;
   }
-  ctx->coll_fd = ret;
+  ctx->coll_fd = 0;
 
   return 0;
 }
@@ -343,7 +329,6 @@ static int in_ros2_exit(void *data, struct flb_config *config) {
   rc += rcl_init_options_fini(&init_options);
   mk_list_foreach_safe(head, tmp, &ctx->topic_subs) {
     an_item = mk_list_entry(head, struct rclc_subscriber, _head);
-    // rc = rcl_subscription_fini(&an_item->data_subscription, &node);
     windrose_data_collection_interfaces__msg__StringStamped__fini(
         &(an_item->data_msg));
   }
@@ -355,19 +340,6 @@ static int in_ros2_exit(void *data, struct flb_config *config) {
   }
   return 0;
 }
-
-// mk_list_foreach_safe(head, tmp, &ctx->topic_subs) {
-//     an_item = mk_list_entry(head, struct rclc_subscriber, _head);
-//     // flb_info("list item data value: %d", an_item->index);
-
-//     rc = rclc_executor_add_subscription(&executor,
-//     &an_item->data_subscription,
-//                                         &(an_item->data_msg), &data_callback,
-//                                         ON_NEW_DATA);
-//     if (rc != RCL_RET_OK) {
-//       flb_error("Error in rclc_executor_add_subscription.\n");
-//     }
-//   }
 
 struct flb_input_plugin in_ros2_plugin = {.name = "ROS2",
                                           .description = "ROS2 Input",
