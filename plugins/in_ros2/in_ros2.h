@@ -39,7 +39,7 @@
 #include "rclc/executor.h"
 #include "rclc/rclc.h"
 
-#include "windrose_data_collection_interfaces/msg/string_stamped.h"
+#include "dc_interfaces/msg/string_stamped.h"
 
 struct rclc_subscriber {
   rcl_subscription_t data_subscription;
@@ -47,7 +47,7 @@ struct rclc_subscriber {
   rcl_subscription_options_t subscription_options;
   // int index;
   char *topic_name;
-  windrose_data_collection_interfaces__msg__StringStamped data_msg;
+  dc_interfaces__msg__StringStamped data_msg;
   struct mk_list _head;
 };
 

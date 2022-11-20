@@ -875,8 +875,8 @@ endif()
 # ROS2
 # ====
 find_package(rclc)
-find_package(windrose_data_collection_interfaces)
-if(FLB_IN_ROS2 AND ((NOT rclc_FOUND) OR (NOT windrose_data_collection_interfaces_FOUND)))
+find_package(dc_interfaces)
+if(FLB_IN_ROS2 AND ((NOT rclc_FOUND) OR (NOT dc_interfaces_FOUND)))
   FLB_OPTION(FLB_IN_ROS2 OFF)
 endif()
 

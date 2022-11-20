@@ -41,9 +41,8 @@ rcl_node_options_t node_ops;
 void *glob_ctx;
 static volatile bool new_data_flag = false;
 
-static int set_timestamp(
-    msgpack_packer *mp_pck,
-    const windrose_data_collection_interfaces__msg__StringStamped *msg) {
+static int set_timestamp(msgpack_packer *mp_pck,
+                         const dc_interfaces__msg__StringStamped *msg) {
   struct flb_time msg_time = {.tm.tv_sec = msg->header.stamp.sec,
                               .tm.tv_nsec = msg->header.stamp.nanosec};
   int ret = flb_time_append_to_msgpack(&msg_time, mp_pck, 0);
@@ -51,10 +50,9 @@ static int set_timestamp(
   return ret;
 }
 
-static inline int
-process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx, char *data,
-             size_t data_size,
-             windrose_data_collection_interfaces__msg__StringStamped *msg) {
+static inline int process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx,
+                               char *data, size_t data_size,
+                               dc_interfaces__msg__StringStamped *msg) {
   size_t off = 0;
   msgpack_unpacked result;
   msgpack_object entry;
@@ -88,12 +86,12 @@ process_pack(msgpack_packer *mp_pck, struct flb_ros2 *ctx, char *data,
   return 0;
 }
 void data_callback(const void *msgin) {
-  windrose_data_collection_interfaces__msg__StringStamped *msg =
-      (windrose_data_collection_interfaces__msg__StringStamped *)msgin;
+  dc_interfaces__msg__StringStamped *msg =
+      (dc_interfaces__msg__StringStamped *)msgin;
   if (msg == NULL) {
     flb_warn("Callback: msg NULL\n");
   } else {
-    flb_debug("Callback: I heard: %d.%d %s\n", msg->header.stamp.sec,
+    flb_debug("Callback: I heard: ts=%d.%d data=%s \n", msg->header.stamp.sec,
               msg->header.stamp.nanosec, msg->data.data);
     struct flb_ros2 *ctx = glob_ctx;
 
@@ -147,7 +145,7 @@ static int ros2_rclc_init() {
   /* Create init_options */
   rcl_ret_t rc = rcl_init_options_init(&init_options, allocator);
   if (rc != RCL_RET_OK) {
-    flb_error("Error rcl_init_options_init.\n");
+    flb_error("Error rcl_init_options_init: %d.\n", rc);
     return -1;
   }
 
@@ -194,8 +192,8 @@ static int ros2_subscribers_init(struct flb_ros2 *ctx) {
       return -1;
     }
     subscriber->data_subscription = rcl_get_zero_initialized_subscription();
-    subscriber->data_type_support = ROSIDL_GET_MSG_TYPE_SUPPORT(
-        windrose_data_collection_interfaces, msg, StringStamped);
+    subscriber->data_type_support =
+        ROSIDL_GET_MSG_TYPE_SUPPORT(dc_interfaces, msg, StringStamped);
     subscriber->subscription_options = rcl_subscription_get_default_options();
 
     rcl_ret_t rc = rcl_subscription_init(
@@ -209,8 +207,8 @@ static int ros2_subscribers_init(struct flb_ros2 *ctx) {
       flb_info("Created subscriber %s", topic->str);
     }
     // subscriber->index = i;
-    if (false == windrose_data_collection_interfaces__msg__StringStamped__init(
-                     &(subscriber->data_msg))) {
+    if (false ==
+        dc_interfaces__msg__StringStamped__init(&(subscriber->data_msg))) {
       flb_error("Failed to init msg.\n");
       return -1;
     }
@@ -329,8 +327,7 @@ static int in_ros2_exit(void *data, struct flb_config *config) {
   rc += rcl_init_options_fini(&init_options);
   mk_list_foreach_safe(head, tmp, &ctx->topic_subs) {
     an_item = mk_list_entry(head, struct rclc_subscriber, _head);
-    windrose_data_collection_interfaces__msg__StringStamped__fini(
-        &(an_item->data_msg));
+    dc_interfaces__msg__StringStamped__fini(&(an_item->data_msg));
   }
   rc += rclc_executor_fini(&executor);
 
