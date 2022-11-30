@@ -32,6 +32,7 @@
 #include <fluent-bit/flb_kv.h>
 #include <fluent-bit/flb_metrics.h>
 #include <fluent-bit/tls/flb_tls.h>
+#include <fluent-bit/flb_plugin.h>
 
 #include <signal.h>
 #include <stdarg.h>
@@ -693,6 +694,22 @@ int flb_start(flb_ctx_t *ctx)
 
     return 0;
 }
+
+int flb_plugin_load_wr(char *path, struct flb_plugins *ctx, struct flb_config *config){
+    return flb_plugin_load(path, ctx, config);
+}
+
+int flb_plugin_load_router_wr(char *path, struct flb_config *config){
+    return flb_plugin_load_router(path, config);
+}
+
+// int flb_plugin_load_config_file_wr(const char *file, struct flb_config *config){
+//     return flb_plugin_load_config_file(file, config);
+// }
+
+// void flb_plugin_destroy_wr(struct flb_plugins *ctx){
+//     flb_plugin_destroy(ctx);
+// }
 
 int flb_loop(flb_ctx_t *ctx)
 {
