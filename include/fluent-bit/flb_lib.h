@@ -84,6 +84,10 @@ FLB_EXPORT int flb_lib_config_file(flb_ctx_t *ctx, const char *path);
 
 FLB_EXPORT int flb_plugin_load_wr(char *path, struct flb_plugins *ctx, struct flb_config *config);
 FLB_EXPORT int flb_plugin_load_router_wr(char *path, struct flb_config *config);
+
+FLB_EXPORT struct flb_plugin_proxy *flb_plugin_proxy_create_wr(const char *dso_path, int type,
+                                                               struct flb_config *config);
+
 // FLB_EXPORT int flb_plugin_load_config_file_wr(const char *file, struct flb_config *config);
 // FLB_EXPORT void flb_plugin_destroy_wr(struct flb_plugins *ctx);
 

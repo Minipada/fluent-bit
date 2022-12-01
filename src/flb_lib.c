@@ -33,6 +33,7 @@
 #include <fluent-bit/flb_metrics.h>
 #include <fluent-bit/tls/flb_tls.h>
 #include <fluent-bit/flb_plugin.h>
+#include <fluent-bit/flb_plugin_proxy.h>
 
 #include <signal.h>
 #include <stdarg.h>
@@ -701,6 +702,10 @@ int flb_plugin_load_wr(char *path, struct flb_plugins *ctx, struct flb_config *c
 
 int flb_plugin_load_router_wr(char *path, struct flb_config *config){
     return flb_plugin_load_router(path, config);
+}
+
+struct flb_plugin_proxy *flb_plugin_proxy_create_wr(const char *dso_path, int type, struct flb_config *config) {
+    return flb_plugin_proxy_create(dso_path, type, config);
 }
 
 // int flb_plugin_load_config_file_wr(const char *file, struct flb_config *config){
